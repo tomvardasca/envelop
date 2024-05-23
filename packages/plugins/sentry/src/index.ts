@@ -134,10 +134,10 @@ export const useSentry = <PluginContext extends Record<string, any> = {}>(
       let rootSpan: Span;
 
       if (startTransaction) {
-        rootSpan = Sentry.startTransaction({
+        rootSpan = Sentry.startInactiveSpan({
           name: transactionName,
           op,
-          tags,
+          attributes: tags,
           ...traceparentData,
         });
 
@@ -149,15 +149,15 @@ export const useSentry = <PluginContext extends Record<string, any> = {}>(
           throw new Error(error.join('\n'));
         }
       } else {
-        const scope = Sentry.getCurrentHub().getScope();
-        const parentSpan = scope?.getSpan();
-        const span = parentSpan?.startChild({
-          description: transactionName,
-          op,
-          tags,
-        });
-
-        if (!span) {
+        const parentSpan = Sentry.getActiveSpan();
+        const span = Sentry.withActiveSpan(parentSpan ?? null, () =>
+          Sentry.startInactiveSpan({
+            name: transactionName,
+            op,
+            attributes: tags,
+          }),
+        );
+        if (!parentSpan || !span) {
           // eslint-disable-next-line no-console
           console.warn(
             [
@@ -171,23 +171,21 @@ export const useSentry = <PluginContext extends Record<string, any> = {}>(
         rootSpan = span;
 
         if (renameTransaction) {
-          scope!.setTransactionName(transactionName);
+          rootSpan.updateName(transactionName);
         }
       }
 
-      Sentry.configureScope(scope => scope.setSpan(rootSpan));
-
-      rootSpan.setData('document', document);
+      Sentry.getCurrentScope().setExtra('document', document);
 
       if (options.configureScope) {
-        Sentry.configureScope(scope => options.configureScope!(args, scope));
+        options.configureScope!(args, Sentry.getCurrentScope());
       }
 
       return {
         onExecuteDone(payload) {
           const handleResult: OnExecuteDoneHookResultOnNextHook<{}> = ({ result, setResult }) => {
             if (includeRawResult) {
-              rootSpan.setData('result', result);
+              Sentry.getCurrentScope().setExtra('result', result);
             }
 
             if (result.errors && result.errors.length > 0) {
@@ -245,7 +243,7 @@ export const useSentry = <PluginContext extends Record<string, any> = {}>(
               });
             }
 
-            rootSpan.finish();
+            rootSpan.end();
           };
           return handleStreamOrSingleExecutionResult(payload, handleResult);
         },
